@@ -1,16 +1,42 @@
 # Argo-supplementary
-Instruction on building the database of Argo.
 
-## Prerequisite
+Instructions for building the database of [Argo](https://github.com/xinehc/argo).
+
+- [Argo-supplementary](#argo-supplementary)
+  - [Prerequisites](#prerequisites)
+    - [Step 1: Install necessary packages](#step-1-install-necessary-packages)
+    - [Step 2: Download GTDB assemblies](#step-2-download-gtdb-assemblies)
+    - [Step 3: Download NCBI *complete genome* and *chromosome-level* plasmids](#step-3-download-ncbi-complete-genome-and-chromosome-level-plasmids)
+    - [Step 4: Collect SARG+](#step-4-collect-sarg)
+    - [Step 4 (alternative): Collect NDARO](#step-4-alternative-collect-ndaro)
+    - [Step 4 (alternative): Collect CARD](#step-4-alternative-collect-card)
+  - [Construction of the *reference taxonomy* database](#construction-of-the-reference-taxonomy-database)
+    - [Step 1: Create an accession to assembly mapping](#step-1-create-an-accession-to-assembly-mapping)
+    - [Step 2: Annotate ARGs with `DIAMOND`](#step-2-annotate-args-with-diamond)
+    - [Step 3: Parse annotations and extract sequences](#step-3-parse-annotations-and-extract-sequences)
+  - [Construction of the *reference plasmid* database](#construction-of-the-reference-plasmid-database)
+    - [Step 1: Retrieve putative plasmid sequences from assemblies](#step-1-retrieve-putative-plasmid-sequences-from-assemblies)
+    - [Step 2: Extract ARG-containing sequences](#step-2-extract-arg-containing-sequences)
+    - [Step 3: Filter out non-plasmid sequences with `geNomad`](#step-3-filter-out-non-plasmid-sequences-with-genomad)
+  - [Deduplication](#deduplication)
+    - [Step 1: Group ARG-containing sequences for each species](#step-1-group-arg-containing-sequences-for-each-species)
+    - [Step 2: Cluster of sequences with `MMseqs2`](#step-2-cluster-of-sequences-with-mmseqs2)
+    - [Step 2: Split files according to ARG type](#step-2-split-files-according-to-arg-type)
+  - [Compress](#compress)
+
+## Prerequisites
+
 ### Step 1: Install necessary packages
+
 ```bash
 conda install -c bioconda -c conda-forge 'seqkit>=2.6.1' 'genomad>=1.8.1' 'mmseqs2>=15.6f452' 'diamond==2.1.8' 'tqdm' 'pandas' 'biopython'
 genomad download-database .
 ```
 
-### Step 2: Collect GTDB assemblies
+### Step 2: Download GTDB assemblies
+
 > [!NOTE]
-> Some genomes (including representative genomes) may be deprecated by NCBI at the time of GTDB release. The representative ones can be downloaded from the FTP of GTDB (`genomic_files_reps/gtdb_genomes_reps.tar.gz`) and manually included. The other non-representative ones cannot be recovered.
+> Some genomes may be deprecated by NCBI at the time of GTDB releases. Representative genomes can still be downloaded from the GTDB FTP (`genomic_files_reps/gtdb_genomes_reps.tar.gz`) and included manually, but the non-representative ones can no longer be retrieved.
 
 ```bash
 ## download metadata files
@@ -26,7 +52,7 @@ wget -qN --show-progress https://data.gtdb.ecogenomic.org/releases/latest/bac120
 gzip -d assembly/ar53_metadata.tsv.gz
 gzip -d assembly/bac120_metadata.tsv.gz
 
-## read metadata, split assemblies into chunks according to taxonomy
+## read metadata, split assemblies into chunks according to phyla
 python -c "
 import pandas as pd
 
@@ -73,36 +99,154 @@ print(f'#species: {assembly.taxonomy.nunique()}')
 print(f'#assemblies: {assembly.assembly.nunique()}')
 print(f'#deprecated_reps: {len(assembly[deprecated])}')
 "
-
-# ## grab representative genomes if necessary
-# wget -qN --show-progress https://data.gtdb.ecogenomic.org/releases/latest/genomic_files_reps/gtdb_genomes_reps.tar.gz
-# tar -xvf gtdb_genomes_reps.tar.gz
-
-# python -c "
-# import pandas as pd
-# import glob
-# import os
-# import shutil
-# dset = set(pd.read_table('assembly/deprecated.tsv').assembly)
-# files = glob.glob('gtdb_genomes_reps/**/*.fna.gz', recursive=True)
-# files = [file for file in files if os.path.basename(file).rsplit('_genomic')[0] in dset]
-# os.makedirs('assembly/fna/deprecated_reps', exist_ok=True)
-# for file in files:
-#     shutil.copy(file, f'assembly/fna/deprecated_reps/{os.path.basename(file)}')
-# "
-# 
-# cat assembly/fna/deprecated_reps/*.fna.gz > assembly/fna/deprecated_reps.fna.gz
 ```
 
-### Step 3: Download assemblies and generate an accession2assembly mapping
+Download assemblies for each `*.id` from NCBI FTP, then concatenate them into chunks.
 
 ```bash
-## download assemblies then cat
 find assembly/fna -maxdepth 1 -name '*.id' | xargs -P 32 -I {} bash -c '
     wget -i ${1} -qN --show-progress -P ${1%.id}; \
     find ${1%.id} -maxdepth 1 -name "*.fna.gz" | xargs cat > ${1%.id}.fna.gz' - {}
+```
 
-## create a dictionary that maps sequence to assembly
+Grab representative genomes if necessary.
+
+```bash
+wget -qN --show-progress https://data.gtdb.ecogenomic.org/releases/latest/genomic_files_reps/gtdb_genomes_reps.tar.gz
+tar -xvf gtdb_genomes_reps.tar.gz
+
+python -c "
+import pandas as pd
+import glob
+import os
+import shutil
+
+dset = set(pd.read_table('assembly/deprecated.tsv').assembly)
+files = glob.glob('gtdb_genomes_reps/**/*.fna.gz', recursive=True)
+files = [file for file in files if os.path.basename(file).rsplit('_genomic')[0] in dset]
+os.makedirs('assembly/fna/deprecated_reps', exist_ok=True)
+for file in files:
+    shutil.copy(file, f'assembly/fna/deprecated_reps/{os.path.basename(file)}')
+"
+
+cat assembly/fna/deprecated_reps/*.fna.gz > assembly/fna/deprecated_reps.fna.gz
+```
+
+### Step 3: Download NCBI *complete genome* and *chromosome-level* plasmids
+
+```bash
+mkdir -p plasmid/fna
+wget -qN --show-progress https://ftp.ncbi.nlm.nih.gov/genomes/refseq/assembly_summary_refseq.txt -P plasmid
+
+python -c "
+import pandas as pd
+
+assembly = pd.read_table('assembly/assembly_summary_refseq.txt', skiprows=1, low_memory=False).rename({'#assembly_accession': 'assembly'}, axis=1)
+assembly = assembly[(assembly.group.isin(['archaea', 'bacteria'])) & ((assembly['ftp_path'] != 'na'))]
+assembly = assembly[assembly.assembly_level.isin({'Complete Genome', 'Chromosome'})]
+assembly['fna'] = assembly['ftp_path'] + '/' + assembly['ftp_path'].str.split('/').str.get(-1) + '_genomic.fna.gz'
+
+for kingdom in ['archaea', 'bacteria']:
+    fna = assembly[assembly['group'] == kingdom]['fna'].to_list()
+    n = 8
+    chunks = [fna[i::n] for i in range(n)]
+
+    for i, chunk in enumerate(chunks):
+        with open('plasmid/fna/' + kingdom + '.split.' + str(i) + '.id', 'w') as w:
+            w.write('\n'.join(chunk) + '\n')
+
+print(f'#assemblies: {assembly.assembly.nunique()}')
+"
+```
+
+Download assemblies.
+
+```bash
+find plasmid/fna -maxdepth 1 -name '*.id' | xargs -P 32 -I {} bash -c '
+    wget -i ${1} -qN --show-progress -P ${1%.id}; \
+    find ${1%.id} -maxdepth 1 -name "*.fna.gz" | xargs cat > ${1%.id}.fna.gz' - {}
+```
+
+### Step 4: Collect SARG+
+
+> [!NOTE]
+> Argo uses [SARG+](https://github.com/xinehc/sarg-curation) by default for ARG annotation, but it also supports [NDARO](https://www.ncbi.nlm.nih.gov/pathogens/antimicrobial-resistance/) (Collect National Database of Antibiotic Resistant Organisms) and [CARD](https://card.mcmaster.ca/) (Comprehensive Antibiotic Resistance Database) (see details below).
+
+```bash
+mkdir -p prot
+git clone https://github.com/xinehc/sarg-curation
+mv sarg-curation/sarg.fa prot/prot.fa
+```
+
+### Step 4 (alternative): Collect NDARO
+
+Reference protein sequences and metadata of NDARO can be downloaded from https://www.ncbi.nlm.nih.gov/pathogens/refgene/ (click `Download` for both the metadata `refgenes.tsv` and the reference protein sequences `reference_protein.faa`). After unzipping, place both files into a folder named `prot`.
+
+We need to parse the metadata to ensure it has a two-level hierarchy.
+
+```bash
+python -c "
+import pandas as pd
+from Bio import SeqIO
+
+ndaro = pd.read_table('prot/refgenes.tsv').fillna('NA')
+ndaro['accession'] = ndaro.apply(lambda x: x['RefSeq protein'] if x['RefSeq protein']!='NA' else x['GenBank protein'], axis=1)
+ndaro = ndaro[(ndaro.groupby('accession').transform('size') == 1) & (ndaro.Subtype.isin(['BIOCIDE', 'AMR']))]
+ndaro['id'] = 'NDARO|' + ndaro['Class'].str.lower().str.replace(' ', '_') + '|' + ndaro['Gene family'].str.replace(' ', '_')
+acc2id = ndaro.set_index('accession')['id'].to_dict()
+
+records = []
+dups = set()
+with open('prot/proteins.faa') as handle:
+    for record in SeqIO.parse(handle, 'fasta'):
+        if record.id in acc2id:
+            record.id = acc2id.get(record.id) + '|' + record.id
+            if record.seq not in dups:
+                dups.add(record.seq)
+                records.append(record)
+
+with open('prot/prot.fa', 'w') as output_handle:
+    SeqIO.write(records, output_handle, 'fasta')
+"
+```
+
+### Step 4 (alternative): Collect CARD
+
+CARD can be obtained from https://card.mcmaster.ca/download. Files `protein_fasta_protein_homolog_model.fasta` and `aro_index.tsv` should be placed in a folder named `prot`.
+
+We need to parse the metadata to ensure it has a two-level hierarchy.
+
+```bash
+python -c "
+import pandas as pd
+import re
+from Bio import SeqIO
+
+card = pd.read_table('prot/aro_index.tsv').fillna('NA')
+card['id'] = 'CARD|' + (card['Drug Class'].str.lower().str.replace(' antibiotic', '') + '|' + card['CARD Short Name']).str.replace(' ', '_')
+acc2id = card.set_index('ARO Accession')['id'].to_dict()
+
+records = []
+dups = set()
+with open('prot/protein_fasta_protein_homolog_model.fasta') as handle:
+    for record in SeqIO.parse(handle, 'fasta'):
+        record.id = acc2id.get(re.search('ARO:[0-9]+', record.description).group()) + '|' + record.id.split('|')[-3]
+        if record.id and record.seq not in dups:
+            dups.add(record.seq)
+            records.append(record)
+
+with open('prot/prot.fa', 'w') as output_handle:
+    SeqIO.write(records, output_handle, 'fasta')
+"
+```
+
+## Construction of the *reference taxonomy* database
+
+### Step 1: Create an accession to assembly mapping
+
+Create a dictionary that maps sequence accessions to to their corresponding assemblies.
+
+```bash
 python -c "
 import glob
 import os
@@ -124,33 +268,10 @@ pd.DataFrame([
 "
 ```
 
-### Step 4: Collect NCBI plasmids
+### Step 2: Annotate ARGs with `DIAMOND`
 
-
-### Step 5: Collect SARG+
-```bash
-mkdir -p prot
-git clone https://github.com/xinehc/sarg-curation
-mv sarg-curation/sarg.fa prot/prot.fa
-rm -rf sarg-curation
-```
-
-### Step 5 (alternative): Collect NDARO
-Protein sequences and metadata of NDARO need to be manually downloaded from https://www.ncbi.nlm.nih.gov/pathogens/refgene/ (click `Download` for both the metadata `refgenes.tsv` and reference protein sequences `refgene_catalog.zip`). After unzip, place all these two files to a folder called `prot`.
-
-We need to parse the metadata to make sure it have a two-level hierarchy.
-```bash
-```
-
-### Step 5 (alternative): Collect CARD
-CARD can be obtained from https://card.mcmaster.ca/download. We use the `protein_fasta_protein_homolog_model.fasta` and the `aro_index.tsv` file only. Please place them to a folder called `prot`.
-
-
-
-## Construction of the taxonomic database
-### Step 1: Map assemblies to the protein databases
 > [!NOTE]
-> This step will take a while to finish. If you are working on HPC, please submit a SLURM job for each `*.fna.gz` file and increase `--threads` to reduce computational time. If not, combining all `*.fna.gz` files into a single one then running `diamond` with tuned `-b -c` may help to speed up.
+> This step will take a while to finish. If you are working on an HPC, please submit a separate SLURM job for each `*.fna.gz` file and increase `--threads` to reduce computation time. If not, combining all `*.fna.gz` files into a single one and running `diamond` with tuned `-b -c` may help speed up the process.
 
 ```bash
 mkdir -p nucl/out
@@ -170,20 +291,28 @@ find assembly/fna -maxdepth 1 -name '*.fna.gz' | sort | xargs -P 8 -I {} bash -c
         --threads 8 --quiet' - {}
 ```
 
-### Step 2: Parse output files and extract sequences
-Parse output files of `diamond` by ensuring at most 25% overlap of HSPs, keep only a single sequence per qseqid-gene combination, discard also sequences close to the boundaries.
+### Step 3: Parse annotations and extract sequences
+
+Parse output files of `diamond`, ensuring at most 25% pairwise overlap of ARGs. Discard also ARGs close to the boundaries, except for sequences with circular topology.
 
 ```bash
-mkdir -p nucl/seq
+mkdir -p nucl/seq 
 
 python -c "
-import os
-import glob
-import subprocess
 import pandas as pd
-from math import floor, ceil
+import glob
+import gzip
+import os
+import xml.etree.ElementTree as ET
+
 from collections import defaultdict
+from math import floor, ceil
+from tqdm import tqdm
+from Bio import Entrez, SeqIO
+from Bio.SeqRecord import SeqRecord
 from tqdm.contrib.concurrent import process_map
+
+Entrez.email = 'A.N.Other@example.com'
 
 def sort_coordinate(start, end):
     return (start - 1, end, '+') if start < end else (end - 1, start, '-')
@@ -193,58 +322,307 @@ def compute_overlap(coordinates):
     overlap = min(qend, send) - max(qstart, sstart)
     return max(overlap / (qend - qstart), overlap / (send - sstart))
 
+## retrieve sequence topology from NCBI
+def get_topology(ids, chunksize = 1000):
+    topology = []
+    n = len(ids) // chunksize + 1
+    folds = [list(ids)[i::n] for i in range(n)]
+    for fold in tqdm(folds):
+        tmp = []
+        while len(tmp) != len(fold):
+            with Entrez.esummary(db='nuccore', id=','.join(fold), rettype='xml', version='2.0') as handle:
+                root = ET.parse(handle).getroot()
+                tmp = [[i,j] for i,j in zip([x.text for x in root.findall('.//AccessionVersion')], [x.text for x in root.findall('.//Topology')])]
+
+            try: assert len(tmp) == len(fold)
+            except: 
+                ## much slower with efetch but safer in general
+                todo = set(fold) - set(x[0] for x in tmp)
+                with Entrez.efetch(db='nuccore', id=','.join(todo), rettype='gb', retmode='xml') as handle:
+                    for i in Entrez.read(handle):
+                        tmp.append([i['GBSeq_accession-version'], i['GBSeq_topology']])
+        topology.extend(tmp)
+
+    return topology
+
+## extract sequence from GTDB
 def extract_sequence(file):
     filename = os.path.basename(file).split('.fna.gz')[0]
-    qrange = defaultdict(set)
-    lines = []
 
-    with open('nucl/out/' + filename + '.txt') as f:
+    bed = defaultdict(list)
+    qrange = defaultdict(set)
+    with open(f'nucl/out/{filename}.txt') as f:
         for line in f:
             ls = line.split()
-            qseqid, sseqid = ls[0], ls[1]
+            qseqid, sseqid, qlen = ls[0], ls[1], int(ls[4])
             qstart, qend, strand = sort_coordinate(int(ls[5]), int(ls[6]))
             if (
                 qseqid not in qrange or
                 all([compute_overlap((qstart, qend, *x)) < 0.25 for x in qrange.get(qseqid)])
             ):
                 qrange[qseqid].add((qstart, qend))
-                pident = float(ls[2])
-                qlen, slen = int(ls[4]), int(ls[7]) * 3
                 qcoord = floor((qstart + qend) / 2) if strand == '+' else ceil((qstart + qend) / 2)
 
                 ## make sure not too close to the boundary
-                if qend + 2500 < qlen and qstart - 2500 > 0:
-                    lines.append([qseqid, qcoord - 5000, qcoord + 5000, sseqid, pident, strand, sseqid.split('-')[0]])
+                topology = qseqid2topology.get(qseqid)
+                if (qend + 2500 < qlen and qstart - 2500 > 0) or topology == 'circular':
+                    bed[ls[0]].append((qcoord - 5000, qcoord + 5000, strand, sseqid, topology))
 
-    ## keep only one sequence per qseqid + gene
-    lines = pd.DataFrame(lines, columns=['qseqid', 'qstart', 'qend', 'sseqid', 'pident', 'strand', 'gene'])
-    lines = lines.sort_values(['qseqid', 'gene', 'pident', 'strand'], ascending=False).groupby(['qseqid', 'gene'], as_index=False).first()
-    lines.drop('gene', axis=1).to_csv('nucl/seq/' + filename + '.bed', sep='\t', header=None, index=False)
+    records = []
+    with gzip.open(file, 'rt') as handle:
+        for record in SeqIO.parse(handle, 'fasta'):
+            if record.id in bed:
+                for row in bed.get(record.id):
+                    subseq = record.seq[max(row[0], 0): min(row[1], len(record.seq))]
+                    fullseq = record.seq * (5000 // len(record.seq) + 1)
 
-    ## extract sequneces from original files
-    with open('nucl/seq/' + filename + '.fa', 'w') as f:
-        subprocess.run([
-            'seqkit', 'subseq', file,
-            '--bed', 'nucl/seq/' + filename + '.bed'
-        ], stdout=f, stderr=subprocess.DEVNULL, check=True)
+                    if row[-1] == 'circular':
+                        if row[0] < 0:
+                            subseq = fullseq[(len(record.seq) + row[0]):] + subseq
+                        if row[1] > len(record.seq):
+                            subseq = subseq + fullseq[:(row[1] - len(record.seq))]
 
+                    if row[2] == '-':
+                        subseq = subseq.reverse_complement()
+                    records.append(SeqRecord(subseq, id=f'{record.id}_{row[0]+1}-{row[1]}:{row[2]}', description = row[3]))
+
+    with open(f'nucl/seq/{filename}.fa', 'w') as output_handle:
+        SeqIO.write(records, output_handle, 'fasta')
+
+## get ids of complete genome and chromosome-level assemblies
+gtdb = pd.concat([
+    pd.read_table('assembly/bac120_metadata.tsv'),
+    pd.read_table('assembly/ar53_metadata.tsv')
+])
+accession = set(gtdb[gtdb['ncbi_assembly_level'].isin({'Chromosome', 'Complete Genome'})].accession.str.split('_', n=1).str.get(-1))
+
+aset = set()
+with open('assembly/accession2assembly.tsv') as f:
+    for line in f:
+        ls = line.rstrip().split('\t')
+        if ls[1] in accession:
+            aset.add(ls[0])
+
+## record sequences with ARGs close to the boundary
+ids = set()
+for file in glob.glob('nucl/out/*.txt'):
+    with open(file) as f:
+        for line in f:
+            ls = line.rstrip().split()
+            qlen, qstart, qend = int(ls[4]), int(ls[5]), int(ls[6])
+            if max(qstart, qend) + 5000 > qlen or min(qstart, qend) - 5000 < 0:
+                if ls[0] in aset:
+                    ids.add(ls[0])
+
+qseqid2topology = {x[0]: x[1] for x in get_topology(ids)}
 process_map(extract_sequence, glob.glob('assembly/fna/*.fna.gz'), max_workers=64, chunksize=1)
 "
 ```
 
-### Step 3: Cluster to remove duplicated sequences
-Create a file for each species-gene combo.
+## Construction of the *reference plasmid* database
+
+### Step 1: Retrieve putative plasmid sequences from assemblies
+
+Extract sequences containing keywords `plasmid` or `megaplasmid`.
+
+```bash
+python -c "
+import glob
+import gzip
+from Bio import SeqIO
+from tqdm.contrib.concurrent import process_map
+
+def parser(file):
+    records = []
+    with gzip.open(file, 'rt') as handle:
+        for record in SeqIO.parse(handle, 'fasta'):
+            if ' plasmid' in record.description or ' megaplasmid' in record.description:
+                records.append(record)
+    return records
+
+r = process_map(parser, glob.glob('plasmid/fna/*/*.fna.gz'), max_workers=64, chunksize=1)
+with open('plasmid/plasmid.fna', 'w') as output_handle:
+    SeqIO.write([x for y in r for x in y], output_handle, 'fasta')
+"
+```
+
+### Step 2: Extract ARG-containing sequences
+
+```bash
+diamond blastx \
+    --db prot/prot.fa \
+    --query plasmid/plasmid.fna \
+    --out plasmid/plasmid_sarg.txt \
+    --outfmt 6 qseqid sseqid pident length qlen qstart qend slen sstart send evalue bitscore \
+    --evalue 1e-15 --subject-cover 90 --id 90 \
+    --range-culling --frameshift 15 --range-cover 25 \
+    --max-hsps 0 --max-target-seqs 25 \
+    --threads 64 --quiet
+```
+
+```bash
+python -c "
+import glob
+import xml.etree.ElementTree as ET
+
+from collections import defaultdict
+from math import floor, ceil
+from tqdm import tqdm
+from Bio import Entrez, SeqIO
+from Bio.SeqRecord import SeqRecord
+
+Entrez.email = 'A.N.Other@example.com'
+
+def sort_coordinate(start, end):
+    return (start - 1, end, '+') if start < end else (end - 1, start, '-')
+
+def compute_overlap(coordinates):
+    qstart, qend, sstart, send = coordinates
+    overlap = min(qend, send) - max(qstart, sstart)
+    return max(overlap / (qend - qstart), overlap / (send - sstart))
+
+def get_topology(ids, chunksize = 1000):
+    topology = []
+    n = len(ids) // chunksize + 1
+    folds = [list(ids)[i::n] for i in range(n)]
+    for fold in tqdm(folds):
+        tmp = []
+        while len(tmp) != len(fold):
+            with Entrez.esummary(db='nuccore', id=','.join(fold), rettype='xml', version='2.0') as handle:
+                root = ET.parse(handle).getroot()
+                tmp = [[i,j] for i,j in zip([x.text for x in root.findall('.//AccessionVersion')], [x.text for x in root.findall('.//Topology')])]
+
+            try: assert len(tmp) == len(fold)
+            except: 
+                ## much slower with efetch but safer in general
+                todo = set(fold) - set(x[0] for x in tmp)
+                with Entrez.efetch(db='nuccore', id=','.join(todo), rettype='gb', retmode='xml') as handle:
+                    for i in Entrez.read(handle):
+                        tmp.append([i['GBSeq_accession-version'], i['GBSeq_topology']])
+        topology.extend(tmp)
+
+    return topology
+
+## record sequences with ARGs close to the boundary
+ids = set()
+with open('plasmid/plasmid_sarg.txt') as f:
+    for line in f:
+        ls = line.rstrip().split()
+        qlen, qstart, qend = int(ls[4]), int(ls[5]), int(ls[6])
+        if max(qstart, qend) + 5000 > qlen or min(qstart, qend) - 5000 < 0:
+            ids.add(ls[0])
+
+## retrieve sequence topology from NCBI
+qseqid2topology = {x[0]: x[1] for x in get_topology(ids)}
+
+bed = defaultdict(list)
+qrange = defaultdict(set)
+with open('plasmid/plasmid_sarg.txt') as f:
+    for line in f:
+        ls = line.split()
+        qseqid, sseqid, qlen = ls[0], ls[1], int(ls[4])
+        qstart, qend, strand = sort_coordinate(int(ls[5]), int(ls[6]))
+        if (
+            qseqid not in qrange or
+            all([compute_overlap((qstart, qend, *x)) < 0.25 for x in qrange.get(qseqid)])
+        ):
+            qrange[qseqid].add((qstart, qend))
+            qcoord = floor((qstart + qend) / 2) if strand == '+' else ceil((qstart + qend) / 2)
+
+            ## make sure not too close to the boundary
+            topology = qseqid2topology.get(qseqid)
+            if (qend + 2500 < qlen and qstart - 2500 > 0) or topology == 'circular':
+                bed[ls[0]].append((qcoord - 5000, qcoord + 5000, strand, sseqid, topology))
+
+records = []
+with open('plasmid/plasmid_sub.fa') as handle:
+    for record in SeqIO.parse(handle, 'fasta'):
+        if record.id in bed:
+            for row in bed.get(record.id):
+                subseq = record.seq[max(row[0], 0): min(row[1], len(record.seq))]
+                fullseq = record.seq * (5000 // len(record.seq) + 1)
+
+                if row[-1] == 'circular':
+                    if row[0] < 0:
+                        subseq = fullseq[(len(record.seq) + row[0]):] + subseq
+                    if row[1] > len(record.seq):
+                        subseq = subseq + fullseq[:(row[1] - len(record.seq))]
+
+                if row[2] == '-':
+                    subseq = subseq.reverse_complement()
+                records.append(SeqRecord(subseq, id=f'plasmid@{record.id}_{row[0]+1}-{row[1]}:{row[2]}', description = row[3]))
+
+with open('plasmid/plasmid_arg.fa', 'w') as output_handle:
+    SeqIO.write(records, output_handle, 'fasta')
+"
+```
+
+
+### Step 3: Filter out non-plasmid sequences with `geNomad`
+
+RefSeq plasmids can be mislabeled, use `geNomad` for double-checking.
+
+```bash
+## first round for filtering of chromosomes
+seqkit grep -f <(cut plasmid/plasmid_sarg.txt -f1) plasmid/plasmid.fna > plasmid/plasmid_sub.fa
+genomad end-to-end --cleanup plasmid/plasmid_sub.fa plasmid/genomad genomad_db \
+    --disable-find-proviruses \
+    --threads 64
+
+## second round with permisssive cutoffs for filtering of chimeras
+genomad end-to-end --cleanup plasmid/plasmid_arg.fa plasmid/genomad genomad_db \
+    --min-virus-marker-enrichment -100 \
+    --min-plasmid-marker-enrichment -100 \
+    --max-uscg 0 --min-score 0 \
+    --disable-find-proviruses \
+    --threads 64
+```
+
+Obtain a subset of ARG-containing plasmid sequences based on `geNomad`'s results.
+
+```bash
+python -c "
+import pandas as pd
+from Bio import SeqIO
+
+sub = set(pd.concat([
+        pd.read_table('plasmid/genomad/plasmid_sub_summary/plasmid_sub_plasmid_summary.tsv'),
+        pd.read_table('plasmid/genomad/plasmid_sub_summary/plasmid_sub_virus_summary.tsv')
+]).seq_name)
+
+arg = pd.read_table('plasmid/genomad/plasmid_arg_aggregated_classification/plasmid_arg_aggregated_classification.tsv')
+arg = scores[scores.seq_name.str.split('@').str.get(-1).str.rsplit('_', n=1).str.get(0).isin(sub)]
+arg = arg[arg.plasmid_score / arg.chromosome_score > 2]
+arg = set(arg.seq_name)
+
+records = []
+with open('plasmid/plasmid_arg.fa') as handle:
+    for record in SeqIO.parse(handle, 'fasta'):
+        if record.id in arg:
+            records.append(record)
+
+with open('nucl/seq/plasmid.fa', 'w') as output_handle:
+    SeqIO.write(records, output_handle, 'fasta')
+"
+```
+
+## Deduplication
+
+### Step 1: Group ARG-containing sequences for each species
+
+Merge all files into a single one.
 
 ```bash
 mkdir -p nucl/raw
 find nucl/seq -maxdepth 1 -name '*.fa' | sort | xargs cat > nucl/raw.fa
+```
 
+Create a file for each species-type-subtype combo.
+
+```bash
 python -c "
 import pandas as pd
 from collections import defaultdict
-
-archaea = {'l2', 'l11', 'l10e', 'l15e', 'l18e', 's3ae', 's19e', 's28e'}
-bacteria = {'l2', 'l11', 'l20', 'l27', 's2', 's7', 's9', 's16'}
 
 assembly2species = {}
 with open('assembly/assembly2species.tsv') as f:
@@ -258,37 +636,32 @@ with open('assembly/accession2assembly.tsv') as f:
         ls = line.rstrip().split('\t')
         accession2assembly[ls[0]] = ls[1]
 
-sequence = defaultdict(list)
 accession = set()
+sequence = defaultdict(list)
 with open('nucl/raw.fa') as f:
     for line in f:
         if line[0] == '>':
-            ls = line.split()
-            gs = ls[1].split('-')
-            ac = ls[0][1:].rsplit('_', 1)[0]
-            species = assembly2species.get(accession2assembly.get(ac))
-            phylum = species[0].split(';')[0].split('|')[-1]
-            if (
-                phylum == 'Archaea' and gs[4] == 'archaea' and gs[0] in archaea or
-                phylum == 'Bacteria' and gs[4] == 'bacteria' and gs[0] in bacteria
-            ):
-                save = True
-                accession.add(ac)
-                subset = gs[0].replace('/', '_') + '.' + species[-1]
+            ls = line[1:].split()
+            if 'plasmid@' in ls[0]:
+                lineage = 'plasmid'
             else:
-                save = False
-        if save:
-            sequence[subset].append(line)
+                accession.add(ls[0].rsplit('_', 1)[0])
+                lineage = str(assembly2species.get(accession2assembly.get(ls[0].rsplit('_', 1)[0]))[-1])
+            subset = ls[1].split('|')[1] + '@' + ls[1].split('|')[2].replace('/','_SLASH_').replace('*','_STAR').replace('''\'''', '_PRIME')+ '.' + lineage
+        sequence[subset].append(line)
 
 ## split the sequences into two parts
-with open('nucl/nucl_a.fa', 'w') as w:
+with open('nucl/nucl_a.fa', 'w') as v, open('nucl/nucl_b.fa', 'w') as w:
     for key, val in sequence.items():
         record = ''.join(val)
         if record.count('>') == 1:
-            w.write(record)
+            if 'plasmid@' in record:
+                v.write(record)
+            else:
+                w.write(record)
         else:
-            with open('nucl/raw/{}.fa'.format(key), 'w') as ww:
-                ww.write(record)
+            with open('nucl/raw/{}.fa'.format(key), 'w') as u:
+                u.write(record)
 
 ## save the metadata file for later usage
 pd.DataFrame([
@@ -297,29 +670,41 @@ pd.DataFrame([
 "
 ```
 
+### Step 2: Cluster of sequences with `MMseqs2`
+
 > [!NOTE]
-> If your are working on HPC, please consider submitting a SLURM job for each `mmseqs` to make them run in parallel, and increase `--threads` to reduce the computational time. Lower `-P` if you encounter memory issues.
+> This step will take some time to complete. If you are working on an HPC, you may consider splitting `nucl/raw/*.fa` into chunks and submit a SLURM job for each chunk to run them in parallel. Increase `--threads` to reduce computational time, and lower `-P` if you encounter memory issues.
 
 ```bash
 mkdir -p nucl/clustered
 
-find nucl/raw -maxdepth 1 -name '*.fa' | sort | xargs -P 16 -I {} bash -c '
+find nucl/raw -maxdepth 1 -name '*.fa' | sort | xargs -P 32 -I {} bash -c '
     filename=${1%.fa*};
     filename=${filename##*/};
     FILE_SIZE=$(stat -c "%s" nucl/raw/$filename.fa)
-    if [ "$FILE_SIZE" -gt 10000000 ]; then THREADS=4; else THREADS=1; fi;
+    if [ "$FILE_SIZE" -gt 10000000 ]; then THREADS=16; else THREADS=1; fi;
     echo $filename $FILE_SIZE $THREADS;
     mmseqs easy-cluster \
         $1 nucl/clustered/$filename nucl/clustered/$filename \
         -c 0.9995 --min-seq-id 0.9995 --cov-mode 1 \
         -s 7.5 --cluster-reassign --threads $THREADS -v 0 > /dev/null' - {}
+
+python -c "
+import glob
+a = {x.split('/')[-1].split('_cluster')[0] for x in glob.glob('nucl/clustered/*.tsv')}
+b = {x.split('/')[-1].split('.fa')[0] for x in glob.glob('nucl/raw/*.fa')}
+
+assert a==b, 'Some files are not processed for some reasons.'
+"
 ```
 
-Combine all clustered files to get the nucleotide database.
+### Step 2: Split files according to ARG type
+
+Combine all clustered files to get the database.
 
 ```bash
-find nucl/clustered -maxdepth 1 -name '*rep_seq.fasta' -exec cat {} \; > nucl/nucl_b.fa
-cat nucl/nucl_a.fa nucl/nucl_b.fa | seqkit sort | seqkit shuffle -s 0 > nucl/nucl.fa
+find nucl/clustered -maxdepth 1 -name '*rep_seq.fasta' -exec cat {} \; > nucl/nucl_c.fa
+cat nucl/nucl_*.fa | seqkit sort | seqkit shuffle -s 0 > nucl/nucl.fa
 
 python -c "
 import pandas as pd
@@ -332,34 +717,27 @@ with open('nucl/nucl.fa') as f:
         if line[0] == '>':
             ls = line.split()
             accession.add(ls[0][1:].rsplit('_', 1)[0])
-            subset = ls[1].split('-')[-2] + '.' + ls[1].split('-')[0].replace('/', '_')
+            subset = ls[1].split('|')[1]
         sequence[subset].append(line)
 
 for key, val in sequence.items():
-    with open('nucl/nucl.{}.fa'.format(key), 'w') as w:
+    with open('nucl/sarg.{}.fa'.format(key), 'w') as w:
         w.write(''.join(val))
 
 metadata = pd.read_table('nucl/raw.tsv')
-metadata[metadata.accession.isin(accession)].to_csv('nucl/metadata.tsv', index=False, sep='\t')
-"
+metadata[metadata.accession.isin(accession)].to_csv('nucl/sarg.metadata.tsv', index=False, sep='\t')
 ```
 
-## Construction of the plasmid database
-### Step 0: selection
-### Step 1: geNomad prescreening
-
-### Step 2: geNomad postscreening
-
-
-
-
 ## Compress
+
 Get all necessary files into the database.
 
 ```bash
-mkdir -p database
-cp nucl/metadata.tsv nucl/nucl.bacteria*.fa nucl/nucl.archaea*.fa database
-cat plus/plus_rep_seq.fasta prot/prot.fa | seqkit sort | seqkit shuffle -s 0 > database/prot.fa
+wget -qN --show-progress https://zenodo.org/records/12571554/files/database.tar.gz
+tar -zxvf database.tar.gz
+
+cp prot/prot.fa database/sarg.fa
+cp nucl/sarg.metadata.tsv nucl/sarg*.fa database
+
 tar --sort=name -zcvf database.tar.gz database
 ```
-# argo-supplementary

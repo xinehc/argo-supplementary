@@ -460,6 +460,8 @@ diamond blastx \
     --threads 64 --quiet
 ```
 
+Extract ARG-containing sequences based on annotated coordinates.
+
 ```bash
 python -c "
 import glob

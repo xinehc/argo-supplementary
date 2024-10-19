@@ -687,7 +687,7 @@ find nucl/raw -maxdepth 1 -name '*.fa' | sort | xargs -P 32 -I {} bash -c '
     if [ "$FILE_SIZE" -gt 10000000 ]; then THREADS=16; else THREADS=1; fi;
     echo $filename $FILE_SIZE $THREADS;
     mmseqs easy-cluster \
-        $1 nucl/clustered/$filename nucl/clustered/$filename \
+        $1 nucl/clustered/$filename nucl/clustered/TMP \
         -c 0.9995 --min-seq-id 0.9995 --cov-mode 1 \
         -s 7.5 --cluster-reassign --threads $THREADS -v 0 > /dev/null' - {}
 

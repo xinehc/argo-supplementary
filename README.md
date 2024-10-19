@@ -148,7 +148,7 @@ assembly['fna'] = assembly['ftp_path'] + '/' + assembly['ftp_path'].str.split('/
 
 for kingdom in ['archaea', 'bacteria']:
     fna = assembly[assembly['group'] == kingdom]['fna'].to_list()
-    n = 8
+    n = 8 if kingdom == 'archaea' else 256 # split into 8 or 256 chunks so that each contains same number of genomes
     chunks = [fna[i::n] for i in range(n)]
 
     for i, chunk in enumerate(chunks):
@@ -593,7 +593,7 @@ sub = set(pd.concat([
 ]).seq_name)
 
 arg = pd.read_table('plasmid/genomad/plasmid_arg_aggregated_classification/plasmid_arg_aggregated_classification.tsv')
-arg = scores[scores.seq_name.str.split('@').str.get(-1).str.rsplit('_', n=1).str.get(0).isin(sub)]
+arg = arg[arg.seq_name.str.split('@').str.get(-1).str.rsplit('_', n=1).str.get(0).isin(sub)]
 arg = arg[arg.plasmid_score / arg.chromosome_score > 2]
 arg = set(arg.seq_name)
 

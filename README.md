@@ -323,7 +323,7 @@ def compute_overlap(coordinates):
     return max(overlap / (qend - qstart), overlap / (send - sstart))
 
 ## retrieve sequence topology from NCBI
-def get_topology(ids, chunksize = 1000):
+def get_topology(ids, chunksize=1000):
     topology = []
     n = len(ids) // chunksize + 1
     folds = [list(ids)[i::n] for i in range(n)]
@@ -483,7 +483,7 @@ def compute_overlap(coordinates):
     overlap = min(qend, send) - max(qstart, sstart)
     return max(overlap / (qend - qstart), overlap / (send - sstart))
 
-def get_topology(ids, chunksize = 1000):
+def get_topology(ids, chunksize=1000):
     topology = []
     n = len(ids) // chunksize + 1
     folds = [list(ids)[i::n] for i in range(n)]

@@ -728,6 +728,7 @@ for key, val in sequence.items():
 
 metadata = pd.read_table('nucl/raw.tsv')
 metadata[metadata.accession.isin(accession)].to_csv('nucl/sarg.metadata.tsv', index=False, sep='\t')
+"
 ```
 
 ## Compress

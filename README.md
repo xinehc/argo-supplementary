@@ -697,7 +697,7 @@ find nucl/raw -maxdepth 1 -name '*.fa' | sort | xargs -P 64 -I {} bash -c '
 
 python -c "
 import glob
-a = {x.split('/')[-1].split('_cluster')[0] for x in glob.glob('nucl/clustered/*.tsv')}
+a = {x.split('/')[-1].split('_rep_seq.fasta')[0] for x in glob.glob('nucl/clustered/*_rep_seq.fasta')}
 b = {x.split('/')[-1].split('.fa')[0] for x in glob.glob('nucl/raw/*.fa')}
 
 print(len(a), len(b))

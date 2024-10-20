@@ -680,23 +680,28 @@ pd.DataFrame([
 ```bash
 mkdir -p nucl/clustered
 
-find nucl/raw -maxdepth 1 -name '*.fa' | sort | xargs -P 32 -I {} bash -c '
-    filename=${1%.fa*};
-    filename=${filename##*/};
-    FILE_SIZE=$(stat -c "%s" nucl/raw/$filename.fa)
-    if [ "$FILE_SIZE" -gt 10000000 ]; then THREADS=16; else THREADS=1; fi;
-    echo $filename $FILE_SIZE $THREADS;
-    mmseqs easy-cluster \
-        $1 nucl/clustered/$filename nucl/clustered/TMP \
-        -c 0.9995 --min-seq-id 0.9995 --cov-mode 1 \
-        -s 7.5 --cluster-reassign --threads $THREADS -v 0 > /dev/null' - {}
+find nucl/raw -maxdepth 1 -name '*.fa' | sort | xargs -P 64 -I {} bash -c '
+    filename=${1%.fa*}
+    filename=${filename##*/}
+    FILE_SIZE=$(stat -c "%s" $1)
+
+    if [ ! -f nucl/clustered/${filename}_rep_seq.fasta ]; then
+        if [ $FILE_SIZE -gt 10000000 ]; then THREADS=16; else THREADS=1; fi
+        echo $filename $FILE_SIZE $THREADS;
+        mmseqs easy-cluster \
+            $1 nucl/clustered/$filename nucl/clustered/$filename \
+            -c 0.9995 --min-seq-id 0.9995 --cov-mode 1 \
+            -s 7.5 --cluster-reassign --threads $THREADS -v 0 > /dev/null
+        rm -rf nucl/clustered/$filename nucl/clustered/${filename}_all_seqs.fasta nucl/clustered/${filename}_cluster.tsv
+    fi' - {}
 
 python -c "
 import glob
 a = {x.split('/')[-1].split('_cluster')[0] for x in glob.glob('nucl/clustered/*.tsv')}
 b = {x.split('/')[-1].split('.fa')[0] for x in glob.glob('nucl/raw/*.fa')}
 
-assert a==b, 'Some files are not processed for some reasons.'
+print(len(a), len(b))
+assert a==b, 'Some files are not processed for some reasons. Try again.'
 "
 ```
 

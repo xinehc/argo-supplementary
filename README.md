@@ -6,7 +6,7 @@ Instructions for building the database of [Argo](https://github.com/xinehc/argo)
   - [Prerequisites](#prerequisites)
     - [Step 1: Install necessary packages](#step-1-install-necessary-packages)
     - [Step 2: Download GTDB assemblies](#step-2-download-gtdb-assemblies)
-    - [Step 3: Download NCBI *complete genome* and *chromosome-level* plasmids](#step-3-download-ncbi-complete-genome-and-chromosome-level-plasmids)
+    - [Step 3: Download RefSeq *complete genome* and *chromosome-level* plasmids](#step-3-download-refseq-complete-genome-and-chromosome-level-plasmids)
     - [Step 4: Collect SARG+](#step-4-collect-sarg)
     - [Step 4 (alternative): Collect NDARO](#step-4-alternative-collect-ndaro)
     - [Step 4 (alternative): Collect CARD](#step-4-alternative-collect-card)
@@ -21,7 +21,7 @@ Instructions for building the database of [Argo](https://github.com/xinehc/argo)
   - [Deduplication](#deduplication)
     - [Step 1: Group ARG-containing sequences for each species](#step-1-group-arg-containing-sequences-for-each-species)
     - [Step 2: Cluster of sequences with `MMseqs2`](#step-2-cluster-of-sequences-with-mmseqs2)
-    - [Step 2: Split files according to ARG type](#step-2-split-files-according-to-arg-type)
+    - [Step 3: Split files according to ARG type](#step-3-split-files-according-to-arg-type)
   - [Compress](#compress)
 
 ## Prerequisites
@@ -132,7 +132,7 @@ for file in files:
 cat assembly/fna/deprecated_reps/*.fna.gz > assembly/fna/deprecated_reps.fna.gz
 ```
 
-### Step 3: Download NCBI *complete genome* and *chromosome-level* plasmids
+### Step 3: Download RefSeq *complete genome* and *chromosome-level* plasmids
 
 ```bash
 mkdir -p plasmid/fna
@@ -148,7 +148,7 @@ assembly['fna'] = assembly['ftp_path'] + '/' + assembly['ftp_path'].str.split('/
 
 for kingdom in ['archaea', 'bacteria']:
     fna = assembly[assembly['group'] == kingdom]['fna'].to_list()
-    n = 8 if kingdom == 'archaea' else 256 # split into 8 or 256 chunks so that each contains same number of genomes
+    n = 2 if kingdom == 'archaea' else 32
     chunks = [fna[i::n] for i in range(n)]
 
     for i, chunk in enumerate(chunks):
@@ -405,7 +405,7 @@ with open('assembly/accession2assembly.tsv') as f:
 
 ## record sequences with ARGs close to the boundary
 ids = set()
-for file in glob.glob('nucl/out/*.txt'):
+for file in tqdm(glob.glob('nucl/out/*.txt')):
     with open(file) as f:
         for line in f:
             ls = line.rstrip().split()
@@ -537,7 +537,7 @@ with open('plasmid/plasmid_sarg.txt') as f:
                 bed[ls[0]].append((qcoord - 5000, qcoord + 5000, strand, sseqid, topology))
 
 records = []
-with open('plasmid/plasmid_sub.fa') as handle:
+with open('plasmid/plasmid.fna') as handle:
     for record in SeqIO.parse(handle, 'fasta'):
         if record.id in bed:
             for row in bed.get(record.id):
@@ -565,18 +565,17 @@ with open('plasmid/plasmid_arg.fa', 'w') as output_handle:
 RefSeq plasmids can be mislabeled, use `geNomad` for double-checking.
 
 ```bash
-## first round for filtering of chromosomes
+## first round for filtering chromosomes
 seqkit grep -f <(cut plasmid/plasmid_sarg.txt -f1) plasmid/plasmid.fna > plasmid/plasmid_sub.fa
 genomad end-to-end --cleanup plasmid/plasmid_sub.fa plasmid/genomad genomad_db \
     --disable-find-proviruses \
+    --conservative \
     --threads 64
 
-## second round with permisssive cutoffs for filtering of chimeras
+## second round with permisssive cutoffs for filtering chimeras
 genomad end-to-end --cleanup plasmid/plasmid_arg.fa plasmid/genomad genomad_db \
-    --min-virus-marker-enrichment -100 \
-    --min-plasmid-marker-enrichment -100 \
-    --max-uscg 0 --min-score 0 \
     --disable-find-proviruses \
+    --relaxed \
     --threads 64
 ```
 
@@ -587,10 +586,9 @@ python -c "
 import pandas as pd
 from Bio import SeqIO
 
-sub = set(pd.concat([
-        pd.read_table('plasmid/genomad/plasmid_sub_summary/plasmid_sub_plasmid_summary.tsv'),
-        pd.read_table('plasmid/genomad/plasmid_sub_summary/plasmid_sub_virus_summary.tsv')
-]).seq_name)
+fea = pd.read_table('plasmid/genomad/plasmid_sub_marker_classification/plasmid_sub_features.tsv')
+sub = pd.read_table('plasmid/genomad/plasmid_sub_summary/plasmid_sub_plasmid_summary.tsv')
+sub = set(sub[sub.seq_name.isin(fea[fea.n_uscg == 0].seq_name)].seq_name)
 
 arg = pd.read_table('plasmid/genomad/plasmid_arg_aggregated_classification/plasmid_arg_aggregated_classification.tsv')
 arg = arg[arg.seq_name.str.split('@').str.get(-1).str.rsplit('_', n=1).str.get(0).isin(sub)]
@@ -666,9 +664,10 @@ with open('nucl/nucl_a.fa', 'w') as v, open('nucl/nucl_b.fa', 'w') as w:
                 u.write(record)
 
 ## save the metadata file for later usage
-pd.DataFrame([
-    [x] + assembly2species.get(accession2assembly.get(x))[0].split(';') for x in accession
-], columns=['accession', 'superkingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']).sort_values('accession').to_csv('nucl/raw.tsv', index=False, sep='\t')
+with open('nucl/raw.tsv', 'w') as f:
+    f.write('\t'.join(['accession', 'superkingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']) + '\n')
+    for i in accession:
+        f.write('\t'.join([i] + assembly2species.get(accession2assembly.get(i))[0].split(';')) + '\n')
 "
 ```
 
@@ -705,7 +704,7 @@ assert a==b, 'Some files are not processed for some reasons. Try again.'
 "
 ```
 
-### Step 2: Split files according to ARG type
+### Step 3: Split files according to ARG type
 
 Combine all clustered files to get the database.
 
@@ -732,7 +731,7 @@ for key, val in sequence.items():
         w.write(''.join(val))
 
 metadata = pd.read_table('nucl/raw.tsv')
-metadata[metadata.accession.isin(accession)].to_csv('nucl/sarg.metadata.tsv', index=False, sep='\t')
+metadata[metadata.accession.isin(accession)].sort_values('accession').to_csv('nucl/sarg.metadata.tsv', index=False, sep='\t')
 "
 ```
 

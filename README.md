@@ -464,7 +464,6 @@ Extract ARG-containing sequences based on annotated coordinates.
 
 ```bash
 python -c "
-import glob
 import xml.etree.ElementTree as ET
 
 from collections import defaultdict
@@ -696,6 +695,7 @@ find nucl/raw -maxdepth 1 -name '*.fa' | sort | xargs -P 64 -I {} bash -c '
 
 python -c "
 import glob
+
 a = {x.split('/')[-1].split('_rep_seq.fasta')[0] for x in glob.glob('nucl/clustered/*_rep_seq.fasta')}
 b = {x.split('/')[-1].split('.fa')[0] for x in glob.glob('nucl/raw/*.fa')}
 
@@ -747,4 +747,224 @@ cp prot/prot.fa database/sarg.fa
 cp nucl/sarg.metadata.tsv nucl/sarg*.fa database
 
 tar --sort=name -zcvf database.tar.gz database
+```
+
+## (optional) Database extension
+### Step 1: Install necessary packages and prepare reference genomes
+To incorporate additional sequences into the reference taxonomy/plasmid database, `gtdbtk` is needed for taxonomic classifcation.
+```bash
+conda install -c bioconda -c conda-forge 'gtdbtk'
+download-db.sh gtdbtk_db
+```
+
+Using the assemblies of wildtype *Escherichia coli* and *Enterococcus lactis* (isolated from HK WWTP) as an example:
+
+```bash
+wget -qN --show-progress https://zenodo.org/records/13992057/files/genome.zip -P extension
+unzip extension/genome.zip -d extension
+
+## rename to ensure unique contig id
+python -c "
+import glob
+import os
+from Bio import SeqIO
+
+records = []
+topology = []
+for file in glob.glob('extension/genome/*.fasta'):
+    newfile = file.replace(' ', '_')
+    os.rename(file, newfile)
+    with open(newfile) as handle:
+        for record in SeqIO.parse(handle, 'fasta'):
+            record.id = file.split('/')[-1].split('.fasta')[0].replace(' ', '_') + '|' + record.id
+            records.append(record)
+
+            ## if topology is unknown, simply set topology to 'linear'
+            topology.append([record.id, 'linear' if 'circular=true' not in record.description else 'circular'])
+        
+with open('extension/genome.fna', 'w') as w:
+    SeqIO.write(records, w, 'fasta')
+
+with open('extension/topology.txt', 'w') as w:
+    for row in topology:
+        w.write('\t'.join(row) + '\n')
+"
+```
+
+### Step 2: Annotate ARGs
+```bash
+diamond blastx \
+    --db prot/prot.fa \
+    --query extension/genome.fna \
+    --out extension/genome_sarg.txt \
+    --outfmt 6 qseqid sseqid pident length qlen qstart qend slen sstart send evalue bitscore \
+    --evalue 1e-15 --subject-cover 90 --id 90 \
+    --range-culling --frameshift 15 --range-cover 25 \
+    --max-hsps 0 --max-target-seqs 25 \
+    --threads 64 --quiet
+```
+
+```bash
+python -c "
+from collections import defaultdict
+from math import floor, ceil
+from tqdm import tqdm
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+
+def sort_coordinate(start, end):
+    return (start - 1, end, '+') if start < end else (end - 1, start, '-')
+
+def compute_overlap(coordinates):
+    qstart, qend, sstart, send = coordinates
+    overlap = min(qend, send) - max(qstart, sstart)
+    return max(overlap / (qend - qstart), overlap / (send - sstart))
+
+qseqid2topology = dict()
+with open('extension/topology.txt') as f:
+    for line in f:
+        ls = line.rstrip().split('\t')
+        qseqid2topology[ls[0]] = ls[1]
+
+bed = defaultdict(list)
+qrange = defaultdict(set)
+with open('extension/genome_sarg.txt') as f:
+    for line in f:
+        ls = line.split()
+        qseqid, sseqid, qlen = ls[0], ls[1], int(ls[4])
+        qstart, qend, strand = sort_coordinate(int(ls[5]), int(ls[6]))
+        if (
+            qseqid not in qrange or
+            all([compute_overlap((qstart, qend, *x)) < 0.25 for x in qrange.get(qseqid)])
+        ):
+            qrange[qseqid].add((qstart, qend))
+            qcoord = floor((qstart + qend) / 2) if strand == '+' else ceil((qstart + qend) / 2)
+
+            ## make sure not too close to the boundary
+            topology = qseqid2topology.get(qseqid)
+            if (qend + 2500 < qlen and qstart - 2500 > 0) or topology == 'circular':
+                bed[ls[0]].append((qcoord - 5000, qcoord + 5000, strand, sseqid, topology))
+
+records = []
+with open('extension/genome.fna') as handle:
+    for record in SeqIO.parse(handle, 'fasta'):
+        if record.id in bed:
+            for row in bed.get(record.id):
+                subseq = record.seq[max(row[0], 0): min(row[1], len(record.seq))]
+                fullseq = record.seq * (5000 // len(record.seq) + 1)
+
+                if row[-1] == 'circular':
+                    if row[0] < 0:
+                        subseq = fullseq[(len(record.seq) + row[0]):] + subseq
+                    if row[1] > len(record.seq):
+                        subseq = subseq + fullseq[:(row[1] - len(record.seq))]
+
+                if row[2] == '-':
+                    subseq = subseq.reverse_complement()
+                records.append(SeqRecord(subseq, id=f'{record.id}_{row[0]+1}-{row[1]}:{row[2]}', description = row[3]))
+
+with open('extension/genome_arg.fa', 'w') as output_handle:
+    SeqIO.write(records, output_handle, 'fasta')
+"
+```
+
+### Step 3: Predict taxonomy and genomic context
+```bash
+gtdbtk classify_wf --genome_dir extension/genome/ --cpus 64 --out_dir extension/gtdbtk -x fasta --mash_db gtdbtk_db/release220/mash/
+seqkit grep -f <(cut extension/genome_sarg.txt -f1) extension/genome.fna > extension/genome_sub.fa
+genomad end-to-end --cleanup extension/genome_sub.fa extension/genomad genomad_db \
+    --disable-find-proviruses \
+    --conservative \
+    --threads 64
+
+## second round with permisssive cutoffs for filtering chimeras
+genomad end-to-end --cleanup extension/genome_arg.fa extension/genomad genomad_db \
+    --disable-find-proviruses \
+    --relaxed \
+    --threads 64
+```
+
+```bash
+python -c "
+import pandas as pd
+from Bio import SeqIO
+
+fea = pd.read_table('extension/genomad/genome_sub_marker_classification/genome_sub_features.tsv')
+sub = pd.read_table('extension/genomad/genome_sub_summary/genome_sub_plasmid_summary.tsv')
+sub = set(sub[sub.seq_name.isin(fea[fea.n_uscg == 0].seq_name)].seq_name)
+
+arg = pd.read_table('extension/genomad/genome_arg_aggregated_classification/genome_arg_aggregated_classification.tsv')
+arg = arg[arg.seq_name.str.split('@').str.get(-1).str.rsplit('_', n=1).str.get(0).isin(sub)]
+arg = arg[arg.plasmid_score / arg.chromosome_score > 2]
+arg = set(arg.seq_name)
+
+records = []
+with open('extension/genome_arg.fa') as handle:
+    for record in SeqIO.parse(handle, 'fasta'):
+        if record.id in arg:
+            record.id = 'plasmid@' + record.id
+            record.description = record.description.split(' ', 1)[-1]
+            records.append(record)
+
+with open('extension/plasmid.fa', 'w') as output_handle:
+    SeqIO.write(records, output_handle, 'fasta')
+"
+```
+
+### Step 4: Merge sequences and metadata
+
+To ensure consistency, all genomes that lack *species-level* resolution will not be used.
+```bash
+python -c "
+from Bio import SeqIO
+from collections import defaultdict
+import pandas as pd
+import os
+
+files = []
+for file in ['gtdbtk.ar53.summary.tsv', 'gtdbtk.bac120.summary.tsv']:
+    file = 'extension/gtdbtk/' + file
+    if os.path.isfile(file):
+        files.append(pd.read_table(file))
+
+gtdbtk = pd.concat(files)
+gtdbtk = gtdbtk[gtdbtk.classification.str.split(';s__').str.get(-1) != '']
+gtdbtk['taxonomy'] = gtdbtk.classification.str.replace('[a-z]__', '', regex=True)
+filename2taxonomy = gtdbtk.set_index('user_genome').taxonomy.to_dict()
+
+meta = set()
+records = defaultdict(list)
+with open('extension/genome_arg.fa') as handle:
+    for record in SeqIO.parse(handle, 'fasta'):
+        filename = record.id.split('|')[0]
+        meta.add((record.id.rsplit('_', 1)[0], *filename2taxonomy.get(filename).split(';')))
+        records[record.description.split(' ')[1].split('|')[1]].append(record)
+
+with open('extension/plasmid.fa') as handle:
+    for record in SeqIO.parse(handle, 'fasta'):
+        records[record.description.split(' ')[1].split('|')[1]].append(record)
+
+for i, j in records.items():
+    with open(f'extension/sarg.{i}.fa', 'w') as w:
+        SeqIO.write(j, w, 'fasta')
+
+with open('extension/sarg.metadata.tsv', 'w') as w:
+    for line in meta:
+        w.write('\t'.join(line) + '\n')
+"
+```
+
+
+```bash
+mkdir -p database.extension
+for file in database/sarg.*.fa database/sarg.metadata.tsv
+do
+    filename=${file##*/}
+    echo $filename
+    if [ ! -e extension/$file ]; then
+        cp database/$filename database.extension/$filename
+    else 
+        cat database/$filename extension/$filename > database.extension/$filename
+    fi
+done
 ```

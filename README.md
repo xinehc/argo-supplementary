@@ -1,6 +1,6 @@
 # Argo-supplementary
 
-Instructions for building the database of [Argo](https://github.com/xinehc/argo).
+Instructions for building/extending the database of [Argo](https://github.com/xinehc/argo).
 
 - [Argo-supplementary](#argo-supplementary)
   - [Prerequisites](#prerequisites)
@@ -8,8 +8,8 @@ Instructions for building the database of [Argo](https://github.com/xinehc/argo)
     - [Step 2: Download GTDB assemblies](#step-2-download-gtdb-assemblies)
     - [Step 3: Download RefSeq *complete genome* and *chromosome-level* plasmids](#step-3-download-refseq-complete-genome-and-chromosome-level-plasmids)
     - [Step 4: Collect SARG+](#step-4-collect-sarg)
-    - [Step 4 (alternative): Collect NDARO](#step-4-alternative-collect-ndaro)
-    - [Step 4 (alternative): Collect CARD](#step-4-alternative-collect-card)
+    - [(alternative) Step 4: Collect NDARO](#alternative-step-4-collect-ndaro)
+    - [(alternative) Step 4: Collect CARD](#alternative-step-4-collect-card)
   - [Construction of the *reference taxonomy* database](#construction-of-the-reference-taxonomy-database)
     - [Step 1: Create an accession to assembly mapping](#step-1-create-an-accession-to-assembly-mapping)
     - [Step 2: Annotate ARGs with `DIAMOND`](#step-2-annotate-args-with-diamond)
@@ -23,7 +23,11 @@ Instructions for building the database of [Argo](https://github.com/xinehc/argo)
     - [Step 2: Cluster of sequences with `MMseqs2`](#step-2-cluster-of-sequences-with-mmseqs2)
     - [Step 3: Split files according to ARG type](#step-3-split-files-according-to-arg-type)
   - [Compress](#compress)
-
+  - [(optional) Database extension](#optional-database-extension)
+    - [Step 1: Install necessary packages and prepare reference genomes](#step-1-install-necessary-packages-and-prepare-reference-genomes)
+    - [Step 2: Annotate ARGs](#step-2-annotate-args)
+    - [Step 3: Predict taxonomy and genomic context](#step-3-predict-taxonomy-and-genomic-context)
+    - [Step 4: Merge sequences and metadata](#step-4-merge-sequences-and-metadata)
 ## Prerequisites
 
 ### Step 1: Install necessary packages
@@ -178,7 +182,7 @@ git clone https://github.com/xinehc/sarg-curation
 mv sarg-curation/sarg.fa prot/prot.fa
 ```
 
-### Step 4 (alternative): Collect NDARO
+### (alternative) Step 4: Collect NDARO
 
 Reference protein sequences and metadata of NDARO can be downloaded from https://www.ncbi.nlm.nih.gov/pathogens/refgene/ (click `Download` for both the metadata `refgenes.tsv` and the reference protein sequences `reference_protein.faa`). After unzipping, place both files into a folder named `prot`.
 
@@ -210,7 +214,7 @@ with open('prot/prot.fa', 'w') as output_handle:
 "
 ```
 
-### Step 4 (alternative): Collect CARD
+### (alternative) Step 4: Collect CARD
 
 CARD can be obtained from https://card.mcmaster.ca/download. Files `protein_fasta_protein_homolog_model.fasta` and `aro_index.tsv` should be placed in a folder named `prot`.
 
@@ -750,20 +754,23 @@ tar --sort=name -zcvf database.tar.gz database
 ```
 
 ## (optional) Database extension
+
 ### Step 1: Install necessary packages and prepare reference genomes
-To incorporate additional sequences into the reference taxonomy/plasmid database, `gtdbtk` is needed for taxonomic classifcation.
+
+To incorporate additional sequences into the reference taxonomy/plasmid database, `gtdbtk` is needed for taxonomic classification.
+
 ```bash
 conda install -c bioconda -c conda-forge 'gtdbtk'
 download-db.sh gtdbtk_db
 ```
 
-Using the assemblies of wildtype *Escherichia coli* and *Enterococcus lactis* (isolated from HK WWTP) as an example:
+Using the assemblies of a wildtype *Escherichia coli* and a wildtype *Enterococcus lactis* (isolated from HK WWTP) as an example:
 
 ```bash
 wget -qN --show-progress https://zenodo.org/records/13992057/files/genome.zip -P extension
 unzip extension/genome.zip -d extension
 
-## rename to ensure unique contig id
+## rename to ensure unique contig ID
 python -c "
 import glob
 import os
@@ -792,6 +799,7 @@ with open('extension/topology.txt', 'w') as w:
 ```
 
 ### Step 2: Annotate ARGs
+
 ```bash
 diamond blastx \
     --db prot/prot.fa \
@@ -869,6 +877,7 @@ with open('extension/genome_arg.fa', 'w') as output_handle:
 ```
 
 ### Step 3: Predict taxonomy and genomic context
+
 ```bash
 gtdbtk classify_wf --genome_dir extension/genome/ --cpus 64 --out_dir extension/gtdbtk -x fasta --mash_db gtdbtk_db/release220/mash/
 seqkit grep -f <(cut extension/genome_sarg.txt -f1) extension/genome.fna > extension/genome_sub.fa
@@ -954,6 +963,7 @@ with open('extension/sarg.metadata.tsv', 'w') as w:
 "
 ```
 
+Merge newly extracted sequences with existing databases.
 
 ```bash
 mkdir -p database.extension

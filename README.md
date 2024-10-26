@@ -757,7 +757,7 @@ tar --sort=name -zcvf database.tar.gz database
 
 ### Step 1: Install necessary packages and prepare reference genomes
 
-To incorporate additional sequences into the reference taxonomy/plasmid database, `gtdbtk` is needed for taxonomic classification.
+To incorporate additional sequences into the reference taxonomy/plasmid databases, we need `GTDB-Tk` for taxonomic classification.
 
 ```bash
 conda install -c bioconda -c conda-forge 'gtdbtk'
@@ -876,7 +876,7 @@ with open('extension/genome_arg.fa', 'w') as output_handle:
 "
 ```
 
-### Step 3: Predict taxonomy and genomic context
+### Step 3: Predict taxonomy and plasmids
 
 ```bash
 gtdbtk classify_wf --genome_dir extension/genome/ --cpus 64 --out_dir extension/gtdbtk -x fasta --mash_db gtdbtk_db/release220/mash/
@@ -923,6 +923,7 @@ with open('extension/plasmid.fa', 'w') as output_handle:
 ### Step 4: Merge sequences and metadata
 
 To ensure consistency, all genomes that lack *species-level* resolution will not be used.
+
 ```bash
 python -c "
 from Bio import SeqIO

@@ -184,7 +184,7 @@ mv sarg-curation/sarg.fa prot/prot.fa
 
 ### (alternative) Step 4: Collect NDARO
 
-Reference protein sequences and metadata of NDARO can be downloaded from https://www.ncbi.nlm.nih.gov/pathogens/refgene/ (click `Download` for both the metadata `refgenes.tsv` and the reference protein sequences `reference_protein.faa`). After unzipping, place both files into a folder named `prot`.
+Reference protein sequences and metadata of NDARO can be downloaded from https://www.ncbi.nlm.nih.gov/pathogens/refgene/ (click `Download` for both the metadata `refgenes.tsv` and the reference protein sequences `protein.faa`). After unzipping, place both files into a folder named `prot`.
 
 We need to parse the metadata to ensure it has a two-level hierarchy.
 

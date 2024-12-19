@@ -650,8 +650,8 @@ with open('nucl/raw.fa') as f:
             else:
                 accession.add(ls[0].rsplit('_', 1)[0])
                 lineage = str(assembly2species.get(accession2assembly.get(ls[0].rsplit('_', 1)[0]))[-1])
-            subset = ls[1].split('|')[1] + '@' + ls[1].split('|')[2].replace('/','_SLASH_').replace('*','_STAR').replace('''\'''', '_PRIME')+ '.' + lineage
-        sequence[subset].append(line)
+            subset = ls[1].split('|')[1] + '@' + ls[1].split('|')[2]
+        sequence[subset.replace('/','_SLASH_').replace('*','_STAR').replace('''\'''', '_PRIME')+ '.' + lineage].append(line)
 
 ## split the sequences into two parts
 with open('nucl/nucl_a.fa', 'w') as v, open('nucl/nucl_b.fa', 'w') as w:

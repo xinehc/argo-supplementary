@@ -728,7 +728,7 @@ with open('nucl/nucl.fa') as f:
             ls = line.split()
             accession.add(ls[0][1:].rsplit('_', 1)[0])
             subset = ls[1].split('|')[1]
-        sequence[subset].append(line)
+        sequence[subset.replace('/', ';')].append(line)
 
 for key, val in sequence.items():
     with open('nucl/sarg.{}.fa'.format(key), 'w') as w:

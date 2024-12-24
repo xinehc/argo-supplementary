@@ -760,7 +760,7 @@ tar --sort=name -zcvf database.tar.gz database
 To incorporate additional sequences into the reference taxonomy/plasmid databases, we need `GTDB-Tk` for taxonomic classification.
 
 ```bash
-conda install -c bioconda -c conda-forge 'gtdbtk'
+conda install -c bioconda -c conda-forge gtdbtk
 download-db.sh gtdbtk_db
 ```
 

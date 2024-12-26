@@ -196,6 +196,7 @@ from Bio import SeqIO
 ndaro = pd.read_table('prot/refgenes.tsv').fillna('NA')
 ndaro['accession'] = ndaro.apply(lambda x: x['RefSeq protein'] if x['RefSeq protein']!='NA' else x['GenBank protein'], axis=1)
 ndaro = ndaro[(ndaro.groupby('accession').transform('size') == 1) & (ndaro.Subtype.isin(['BIOCIDE', 'AMR']))]
+ndaro.loc[ndaro['#Allele'] != 'NA', 'Gene family'] = ndaro.loc[ndaro['#Allele'] != 'NA', '#Allele']
 ndaro['id'] = 'NDARO|' + ndaro['Class'].str.lower().str.replace(' ', '_') + '|' + ndaro['Gene family'].str.replace(' ', '_')
 acc2id = ndaro.set_index('accession')['id'].to_dict()
 

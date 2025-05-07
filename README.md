@@ -33,14 +33,14 @@ Instructions for building/extending the database of [Argo](https://github.com/xi
 ### Step 1: Install necessary packages
 
 ```bash
-conda install -c bioconda -c conda-forge 'seqkit>=2.6.1' 'genomad>=1.8.1' 'mmseqs2>=15.6f452' 'diamond==2.1.8' 'tqdm' 'pandas' 'biopython'
+conda install -c bioconda -c conda-forge 'seqkit>=2.10.0' 'genomad>=1.11.0' 'mmseqs2>=17.b804f' 'diamond>=2.1.11' 'tqdm' 'pandas' 'biopython'
 genomad download-database .
 ```
 
 ### Step 2: Download GTDB assemblies
 
 > [!NOTE]
-> Some genomes may be deprecated by NCBI at the time of GTDB releases. Representative genomes can still be downloaded from the GTDB FTP (`genomic_files_reps/gtdb_genomes_reps.tar.gz`) and included manually, but the non-representative ones can no longer be retrieved.
+> Some genomes (including representative genomes) may be deprecated by NCBI at the time of GTDB release. The representative ones can be downloaded from the FTP of GTDB (`genomic_files_reps/gtdb_genomes_reps.tar.gz`) and manually included.
 
 ```bash
 ## download metadata files
@@ -50,13 +50,13 @@ wget -qN --show-progress https://ftp.ncbi.nlm.nih.gov/genomes/refseq/assembly_su
 wget -qN --show-progress https://ftp.ncbi.nlm.nih.gov/genomes/genbank/assembly_summary_genbank.txt -P assembly
 wget -qN --show-progress https://ftp.ncbi.nlm.nih.gov/genomes/genbank/assembly_summary_genbank_historical.txt -P assembly
 
-wget -qN --show-progress https://data.gtdb.ecogenomic.org/releases/latest/ar53_metadata.tsv.gz -P assembly
-wget -qN --show-progress https://data.gtdb.ecogenomic.org/releases/latest/bac120_metadata.tsv.gz -P assembly
+wget -qN --show-progress https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/ar53_metadata.tsv.gz -P assembly
+wget -qN --show-progress https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/bac120_metadata.tsv.gz -P assembly
 
 gzip -d assembly/ar53_metadata.tsv.gz
 gzip -d assembly/bac120_metadata.tsv.gz
 
-## read metadata, split assemblies into chunks according to phyla
+## read metadata, split assemblies into chunks according to taxonomy
 python -c "
 import pandas as pd
 
@@ -98,25 +98,21 @@ for kingdom in ['archaea', 'bacteria']:
         with open('assembly/fna/' + kingdom + '.split.' + str(i) + '.id', 'w') as w:
             w.write('\n'.join(chunk) + '\n')
 
-deprecated = (assembly.ftp_path == 'na') | (assembly.ftp_path.isnull())
-print(f'#species: {assembly.taxonomy.nunique()}')
-print(f'#assemblies: {assembly.assembly.nunique()}')
-print(f'#deprecated_reps: {len(assembly[deprecated])}')
+with open('assembly/info.tsv', 'w') as f:
+    f.write(f'species\t{assembly.taxonomy.nunique()}\n')
+    f.write(f'assemblies\t{assembly.assembly.nunique()}\n')
+    f.write(f'deprecated_reps\t{len(assembly[(assembly.ftp_path == 'na') | (assembly.ftp_path.isnull())])}\n')
 "
 ```
 
 Download assemblies for each `*.id` from NCBI FTP, then concatenate them into chunks.
-
 ```bash
 find assembly/fna -maxdepth 1 -name '*.id' | xargs -P 32 -I {} bash -c '
     wget -i ${1} -qN --show-progress -P ${1%.id}; \
     find ${1%.id} -maxdepth 1 -name "*.fna.gz" | xargs cat > ${1%.id}.fna.gz' - {}
-```
 
-Grab representative genomes if necessary.
-
-```bash
-wget -qN --show-progress https://data.gtdb.ecogenomic.org/releases/latest/genomic_files_reps/gtdb_genomes_reps.tar.gz
+## collect representative genomes if necessary
+wget -qN --show-progress https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/genomic_files_reps/gtdb_genomes_reps.tar.gz
 tar -xvf gtdb_genomes_reps.tar.gz
 
 python -c "
@@ -126,7 +122,7 @@ import os
 import shutil
 
 dset = set(pd.read_table('assembly/deprecated.tsv').assembly)
-files = glob.glob('gtdb_genomes_reps/**/*.fna.gz', recursive=True)
+files = glob.glob('gtdb_genomes_reps*/**/*.fna.gz', recursive=True)
 files = [file for file in files if os.path.basename(file).rsplit('_genomic')[0] in dset]
 os.makedirs('assembly/fna/deprecated_reps', exist_ok=True)
 for file in files:
@@ -140,7 +136,6 @@ cat assembly/fna/deprecated_reps/*.fna.gz > assembly/fna/deprecated_reps.fna.gz
 
 ```bash
 mkdir -p plasmid/fna
-wget -qN --show-progress https://ftp.ncbi.nlm.nih.gov/genomes/refseq/assembly_summary_refseq.txt -P plasmid
 
 python -c "
 import pandas as pd
@@ -159,7 +154,8 @@ for kingdom in ['archaea', 'bacteria']:
         with open('plasmid/fna/' + kingdom + '.split.' + str(i) + '.id', 'w') as w:
             w.write('\n'.join(chunk) + '\n')
 
-print(f'#assemblies: {assembly.assembly.nunique()}')
+with open('plasmid/info.tsv', 'w') as f:
+    f.write(f'assemblies\t{assembly.assembly.nunique()}\n')
 "
 ```
 
@@ -186,7 +182,7 @@ mv sarg-curation/sarg.fa prot/prot.fa
 
 Reference protein sequences and metadata of NDARO can be downloaded from https://www.ncbi.nlm.nih.gov/pathogens/refgene/ (click `Download` for both the metadata `refgenes.tsv` and the reference protein sequences `protein.faa`). After unzipping, place both files into a folder named `prot`.
 
-We need to parse the metadata to ensure it has a two-level hierarchy.
+Parse the metadata to ensure a two-level hierarchy.
 
 ```bash
 python -c "
@@ -217,9 +213,9 @@ with open('prot/prot.fa', 'w') as output_handle:
 
 ### (alternative) Step 4: Collect CARD
 
-CARD can be obtained from https://card.mcmaster.ca/download. Files `protein_fasta_protein_homolog_model.fasta` and `aro_index.tsv` should be placed in a folder named `prot`.
+CARD can be downloaded from https://card.mcmaster.ca/download. Files `protein_fasta_protein_homolog_model.fasta` and `aro_index.tsv` should be placed in a folder named `prot`.
 
-We need to parse the metadata to ensure it has a two-level hierarchy.
+Parse the metadata to ensure a two-level hierarchy.
 
 ```bash
 python -c "
@@ -274,9 +270,8 @@ pd.DataFrame([
 ```
 
 ### Step 2: Annotate ARGs with `DIAMOND`
-
-> [!NOTE]
-> This step will take a while to finish. If you are working on an HPC, please submit a separate SLURM job for each `*.fna.gz` file and increase `--threads` to reduce computation time. If not, combining all `*.fna.gz` files into a single one and running `diamond` with tuned `-b -c` may help speed up the process.
+> [!TIP]
+> This step will take a while to complete. If you are working on HPC, submit a separate SLURM job for each `*.fna.gz` file and increase `--threads` to reduce computational time. If not, combining all `*.fna.gz` files into a single one then running `diamond` with tuned `-b -c` may help to speed up.
 
 ```bash
 mkdir -p nucl/out
@@ -290,7 +285,7 @@ find assembly/fna -maxdepth 1 -name '*.fna.gz' | sort | xargs -P 8 -I {} bash -c
         --query $1 \
         --out nucl/out/${filename}.txt \
         --outfmt 6 qseqid sseqid pident length qlen qstart qend slen sstart send evalue bitscore \
-        --evalue 1e-15 --subject-cover 90 --id 90 \
+        --evalue 1e-25 --subject-cover 90 --id 90 \
         --range-culling --frameshift 15 --range-cover 25 \
         --max-hsps 0 --max-target-seqs 25 \
         --threads 8 --quiet' - {}
@@ -298,7 +293,7 @@ find assembly/fna -maxdepth 1 -name '*.fna.gz' | sort | xargs -P 8 -I {} bash -c
 
 ### Step 3: Parse annotations and extract sequences
 
-Parse output files of `diamond`, ensuring at most 25% pairwise overlap of ARGs. Discard also ARGs close to the boundaries, except for sequences with circular topology.
+Parse output files of `diamond` by ensuring at most 25% pairwise overlap of ARGs. Discard also ARGs close to the boundaries, except for sequences with circular topology.
 
 ```bash
 mkdir -p nucl/seq 
@@ -459,7 +454,7 @@ diamond blastx \
     --query plasmid/plasmid.fna \
     --out plasmid/plasmid_sarg.txt \
     --outfmt 6 qseqid sseqid pident length qlen qstart qend slen sstart send evalue bitscore \
-    --evalue 1e-15 --subject-cover 90 --id 90 \
+    --evalue 1e-25 --subject-cover 90 --id 90 \
     --range-culling --frameshift 15 --range-cover 25 \
     --max-hsps 0 --max-target-seqs 25 \
     --threads 64 --quiet
@@ -621,7 +616,7 @@ mkdir -p nucl/raw
 find nucl/seq -maxdepth 1 -name '*.fa' | sort | xargs cat > nucl/raw.fa
 ```
 
-Create a file for each species-type-subtype combo.
+Create a file for each species-type-subtype combination.
 
 ```bash
 python -c "
@@ -677,8 +672,8 @@ with open('nucl/raw.tsv', 'w') as f:
 
 ### Step 2: Cluster of sequences with `MMseqs2`
 
-> [!NOTE]
-> This step will take some time to complete. If you are working on an HPC, you may consider splitting `nucl/raw/*.fa` into chunks and submit a SLURM job for each chunk to run them in parallel. Increase `--threads` to reduce computational time, and lower `-P` if you encounter memory issues.
+> [!TIP]
+> This step will take a while to complete. If you are working on HPC, consider splitting `nucl/raw/*.fa` into chunks and submit a SLURM job for each chunk to run them in parallel. Increase `--threads` to reduce computational time. Lower `-P` if you encounter memory issues.
 
 ```bash
 mkdir -p nucl/clustered
@@ -745,7 +740,7 @@ metadata[metadata.accession.isin(accession)].sort_values('accession').to_csv('nu
 Get all necessary files into the database.
 
 ```bash
-wget -qN --show-progress https://zenodo.org/records/12571554/files/database.tar.gz
+wget -qN --show-progress https://zenodo.org/records/15231379/files/database.tar.gz
 tar -zxvf database.tar.gz
 
 cp prot/prot.fa database/sarg.fa
@@ -807,7 +802,7 @@ diamond blastx \
     --query extension/genome.fna \
     --out extension/genome_sarg.txt \
     --outfmt 6 qseqid sseqid pident length qlen qstart qend slen sstart send evalue bitscore \
-    --evalue 1e-15 --subject-cover 90 --id 90 \
+    --evalue 1e-25 --subject-cover 90 --id 90 \
     --range-culling --frameshift 15 --range-cover 25 \
     --max-hsps 0 --max-target-seqs 25 \
     --threads 64 --quiet
@@ -880,7 +875,7 @@ with open('extension/genome_arg.fa', 'w') as output_handle:
 ### Step 3: Predict taxonomy and plasmids
 
 ```bash
-gtdbtk classify_wf --genome_dir extension/genome/ --cpus 64 --out_dir extension/gtdbtk -x fasta --mash_db gtdbtk_db/release220/mash/
+gtdbtk classify_wf --genome_dir extension/genome/ --cpus 64 --out_dir extension/gtdbtk -x fasta --mash_db gtdbtk_db
 seqkit grep -f <(cut extension/genome_sarg.txt -f1) extension/genome.fna > extension/genome_sub.fa
 genomad end-to-end --cleanup extension/genome_sub.fa extension/genomad genomad_db \
     --disable-find-proviruses \

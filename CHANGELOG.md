@@ -1,4 +1,10 @@
 # Changelog
+## 2026-05-19
+### Changed
+- Keep all in bash scripts.
+- Remove the CARD/NDARO/extension workflow for simplicity.
+
+
 ## 2025-05-01
 ### Changed
 - Fix diamond evalue to 1e-25 (from 1e-15).
